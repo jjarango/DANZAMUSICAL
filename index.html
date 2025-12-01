@@ -1,0 +1,219 @@
+<!-- 
+Cambios Técnicos:Recorte de Bajos: El gráfico ignora todo lo que esté por debajo de 100 Hz. La primera barra a la izquierda es exactamente 100 Hz.Techo en 6.5 kHz: La última barra a la derecha es exactamente 6,500 Hz.Zoom Total: Esos 6,400 Hz de ancho de banda se estiran para ocupar toda la pantalla.Color: 100 Hz = Azul Fuerte $\rightarrow$ 6.5 kHz = Rojo.Guarde como espectro_final_100_6500.html.
+-->
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analizador de Banda Media (100Hz - 6.5kHz)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #ddd;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        #ui-layer {
+            z-index: 10;
+            text-align: center;
+            pointer-events: none;
+        }
+
+        #controls {
+            pointer-events: auto;
+            background: rgba(10, 10, 10, 0.95);
+            padding: 25px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            box-shadow: 0 10px 40px rgba(0,0,0,1);
+        }
+
+        h2 {
+            margin: 0 0 10px 0;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            font-size: 1.1rem;
+            color: #3388ff; /* Título azulado */
+        }
+
+        button {
+            padding: 12px 30px;
+            font-size: 15px;
+            background: #d4d4d4;
+            color: #000;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 700;
+        }
+
+        button:hover {
+            background: #fff;
+            transform: scale(1.02);
+            box-shadow: 0 0 20px rgba(50, 100, 255, 0.6);
+        }
+
+        .info-overlay {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-size: 0.85rem;
+            color: #888;
+            z-index: 5;
+            text-align: right;
+            font-family: monospace;
+            line-height: 1.4;
+        }
+        .blue-txt { color: #4488ff; font-weight: bold; }
+        .red-txt { color: #ff4444; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="controls">
+            <h2>Banda Media (Vocal/Instrumental)</h2>
+            <button id="btnStart">ACTIVAR MICRÓFONO (x2)</button>
+            <p style="margin-top:10px; font-size: 0.8em; color: #aaa;">Rango: 100Hz - 6.5kHz</p>
+        </div>
+    </div>
+
+    <div class="info-overlay">
+        Inicio (Izq): <span class="blue-txt">100 Hz</span><br>
+        Final (Der): <span class="red-txt">6.5 kHz</span><br>
+        Ganancia: x2.0
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const btnStart = document.getElementById('btnStart');
+        const controls = document.getElementById('controls');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let audioContext;
+        let analyser;
+        let gainNode;
+        let dataArray;
+        let bufferLength;
+        let microphone;
+
+        // --- PARÁMETROS FINALES ---
+        const MIN_FREQ = 100;       // Inicio del gráfico (Azul)
+        const MAX_FREQ = 6500;      // Fin del gráfico (Rojo)
+        const INPUT_GAIN = 2.0;     // Ganancia
+        // --------------------------
+
+        let minIndex;
+        let maxIndex;
+        let barsToDraw;
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        btnStart.addEventListener('click', async () => {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const sampleRate = audioContext.sampleRate;
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 4096; 
+                analyser.smoothingTimeConstant = 0.85; 
+
+                gainNode = audioContext.createGain();
+                gainNode.gain.value = INPUT_GAIN; 
+
+                bufferLength = analyser.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
+
+                // CÁLCULO DE RANGOS
+                const nyquist = sampleRate / 2;
+                // Regla de tres para encontrar en qué índice cae 100Hz y 6500Hz
+                minIndex = Math.floor(bufferLength * (MIN_FREQ / nyquist));
+                maxIndex = Math.floor(bufferLength * (MAX_FREQ / nyquist));
+                
+                // Cantidad total de barras que vamos a dibujar
+                barsToDraw = maxIndex - minIndex;
+
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(gainNode);
+                gainNode.connect(analyser);
+
+                controls.style.display = 'none'; 
+                animar();
+
+            } catch (err) {
+                console.error(err);
+                alert('No se pudo acceder al micrófono.');
+            }
+        });
+
+        function animar() {
+            requestAnimationFrame(animar);
+            analyser.getByteFrequencyData(dataArray);
+
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Calculamos el ancho de barra basado en el rango recortado
+            const barWidth = (canvas.width / barsToDraw);
+            let barHeight;
+            let x = 0;
+
+            // El bucle empieza en minIndex (100Hz) y termina en maxIndex (6.5kHz)
+            for (let i = minIndex; i < maxIndex; i++) {
+                
+                let normalized = dataArray[i] / 255;
+                barHeight = Math.pow(normalized, 1.0) * canvas.height;
+
+                // CÁLCULO DE COLOR RELATIVO AL RANGO VISIBLE
+                // Queremos que i=minIndex sea Azul (240) y i=maxIndex sea Rojo (0)
+                
+                // 1. Averiguamos qué tan avanzado vamos en el rango actual (de 0.0 a 1.0)
+                const currentPosition = i - minIndex;
+                const percentage = currentPosition / barsToDraw;
+
+                // 2. Mapeamos ese porcentaje de 240 a 0
+                const hue = 240 - (percentage * 240);
+
+                // Luminosidad
+                const light = 40 + (normalized * 40);
+
+                ctx.fillStyle = `hsl(${hue}, 100%, ${light}%)`;
+                
+                // +0.8 de ancho extra para evitar grietas visuales
+                ctx.fillRect(x, canvas.height - barHeight, barWidth + 0.8, barHeight);
+                x += barWidth;
+            }
+        }
+    </script>
+</body>
+</html>
